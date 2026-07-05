@@ -1,0 +1,22 @@
+{
+  "name": "remote-desktop-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebRTC remote desktop Client — Vue SPA running in the controller's browser. Displays the Host's desktop, plays audio, and sends local input/clipboard to the Host. See ../CONTEXT.md for domain vocabulary.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "vue-tsc": "^2.2.0"
+  }
+}

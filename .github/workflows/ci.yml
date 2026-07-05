@@ -1,0 +1,76 @@
+# CI for remote-desktop (PRD #1 / slice #2 骨架)。
+#
+# 双 runner 设计遵循 ADR-0004(纯 syscall / build tags):
+#   - Linux runner:WSL 开发循环的镜像 —— go test ./...(跑 stub 路径)+ SPA build。
+#   - Windows runner:真机验证 —— 至少跑通 GOOS=windows go build(后续 slice 在
+#     此 runner 上跑真机端到端测试,如 DXGI/MF/WASAPI)。
+#
+# Go 版本与本地开发机对齐(go.mod 的 go 1.26.4)。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Linux: Go test (stub 路径) + SPA build ─────────────────────────
+  linux:
+    name: Linux · go test + SPA build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test ./...
+        run: go test ./...
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: SPA install
+        working-directory: client
+        run: npm ci || npm install
+
+      - name: SPA build
+        working-directory: client
+        run: npm run build
+
+  # ── Windows: 交叉编译验证(真机 runner,后续 slice 跑真机测试)─────
+  windows:
+    name: Windows · go build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build (Windows native)
+        # Windows runner 上 GOOS=windows 是默认;显式写出便于读者理解。
+        env:
+          GOOS: windows
+        run: go build ./...
+
+      - name: go vet (Windows)
+        # vet 也走一遍 Windows 路径,确保 platform_windows.go 的占位编译干净。
+        run: go vet ./...
