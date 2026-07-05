@@ -14,7 +14,7 @@ import (
 // runner 上跑(见 ADR-0004 + PRD #1 Testing Decisions)。
 
 func TestConfig_Validate(t *testing.T) {
-	t.Run("TLS mode requires both cert and key", func(t *testing.T) {
+	t.Run("field-presence errors", func(t *testing.T) {
 		cases := []struct {
 			name string
 			cfg  Config
@@ -22,23 +22,43 @@ func TestConfig_Validate(t *testing.T) {
 		}{
 			{
 				name: "missing addr",
-				cfg:  Config{CertFile: "c", KeyFile: "k", ICECandidates: "host"},
+				cfg:  Config{Password: "p", AllowedOrigins: []string{"o"}, CertFile: "c", KeyFile: "k", ICECandidates: "host"},
 				want: "Addr must be set",
 			},
 			{
 				name: "tls mode missing cert",
-				cfg:  Config{Addr: ":443", KeyFile: "k", ICECandidates: "host"},
+				cfg:  Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"o"}, KeyFile: "k", ICECandidates: "host"},
 				want: "--cert required",
 			},
 			{
 				name: "tls mode missing key",
-				cfg:  Config{Addr: ":443", CertFile: "c", ICECandidates: "host"},
+				cfg:  Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"o"}, CertFile: "c", ICECandidates: "host"},
 				want: "--key required",
 			},
 			{
+				name: "tls mode missing origin",
+				cfg:  Config{Addr: ":443", Password: "p", CertFile: "c", KeyFile: "k", ICECandidates: "host"},
+				want: "--origin required",
+			},
+			{
+				name: "missing password",
+				cfg:  Config{Addr: ":443", AllowedOrigins: []string{"o"}, CertFile: "c", KeyFile: "k", ICECandidates: "host"},
+				want: "--password required",
+			},
+			{
 				name: "missing ice candidates default",
-				cfg:  Config{Addr: ":443", CertFile: "c", KeyFile: "k", ICECandidates: ""},
+				cfg:  Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"o"}, CertFile: "c", KeyFile: "k", ICECandidates: ""},
 				want: "ICECandidates must be set",
+			},
+			{
+				name: "ice stun not implemented yet",
+				cfg:  Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"o"}, CertFile: "c", KeyFile: "k", ICECandidates: "stun"},
+				want: "not implemented yet",
+			},
+			{
+				name: "ice invalid value",
+				cfg:  Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"o"}, CertFile: "c", KeyFile: "k", ICECandidates: "banana"},
+				want: "must be",
 			},
 		}
 		for _, tc := range cases {
@@ -54,15 +74,21 @@ func TestConfig_Validate(t *testing.T) {
 		}
 	})
 
-	t.Run("insecure mode does not require cert/key", func(t *testing.T) {
-		cfg := Config{Addr: ":8080", Insecure: true, ICECandidates: "host"}
+	t.Run("insecure mode does not require cert/key/origin", func(t *testing.T) {
+		// insecure 模式下 origin 可省略(EffectiveOrigins 兜底 localhost)。
+		cfg := Config{Addr: ":8080", Insecure: true, Password: "p", ICECandidates: "host"}
 		if err := cfg.Validate(); err != nil {
-			t.Fatalf("insecure mode should not require cert/key, got error: %v", err)
+			t.Fatalf("insecure mode should not require cert/key/origin, got error: %v", err)
+		}
+		// EffectiveOrigins 兜底 localhost 通配。
+		eo := cfg.EffectiveOrigins()
+		if len(eo) == 0 {
+			t.Fatalf("insecure mode without --origin should default to localhost origins")
 		}
 	})
 
 	t.Run("valid TLS config passes", func(t *testing.T) {
-		cfg := Config{Addr: ":443", CertFile: "cert.pem", KeyFile: "key.pem", ICECandidates: "host"}
+		cfg := Config{Addr: ":443", Password: "p", AllowedOrigins: []string{"https://app.example.com"}, CertFile: "cert.pem", KeyFile: "key.pem", ICECandidates: "host"}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("valid TLS config should pass, got error: %v", err)
 		}
@@ -74,7 +100,7 @@ func TestConfig_Validate(t *testing.T) {
 // HTTP 请求/响应,全程真实无 mock。
 func TestServer_HealthEndpoint(t *testing.T) {
 	// Insecure 配置让 NewServer 不卡 TLS 校验;httptest 起的是 HTTP server。
-	cfg := Config{Addr: "127.0.0.1:0", Insecure: true, ICECandidates: "host"}
+	cfg := Config{Addr: "127.0.0.1:0", Insecure: true, Password: "p", ICECandidates: "host"}
 	srv, err := NewServer(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -100,7 +126,7 @@ func TestServer_HealthEndpoint(t *testing.T) {
 
 // TestServer_SmokePage 验证冒烟页面返回 200 + HTML。
 func TestServer_SmokePage(t *testing.T) {
-	cfg := Config{Addr: "127.0.0.1:0", Insecure: true, ICECandidates: "host"}
+	cfg := Config{Addr: "127.0.0.1:0", Insecure: true, Password: "p", ICECandidates: "host"}
 	srv, err := NewServer(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -129,8 +155,8 @@ func TestServer_SmokePage(t *testing.T) {
 
 // TestNewServer_RejectsInvalidConfig 验证 NewServer 在 Config 校验失败时返回错误。
 func TestNewServer_RejectsInvalidConfig(t *testing.T) {
-	// TLS mode without cert/key should fail at NewServer.
-	cfg := Config{Addr: ":443", ICECandidates: "host"} // missing cert+key, not insecure
+	// TLS mode without cert/key/password/origin should fail at NewServer.
+	cfg := Config{Addr: ":443", ICECandidates: "host"} // missing cert+key+password+origin
 	_, err := NewServer(cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid config, got nil")

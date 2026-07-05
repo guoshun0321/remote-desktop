@@ -40,6 +40,13 @@ func run(args []string) int {
 	key := fs.String("key", "", "TLS key path (required unless --insecure)")
 	insecure := fs.Bool("insecure", false, "skip TLS — plaintext local-only dev (prints INSECURE warning)")
 	iceCandidates := fs.String("ice.candidates", "host", `ICE candidate mode: "host" (default, LAN-only) | "stun" | "turn"`)
+	password := fs.String("password", "", "single-password for WebSocket first-frame auth (required)")
+	// --origin 可多次;累积进 slice。支持精确 origin 或 "http://localhost:*" 通配。
+	origins := []string{}
+	fs.Func("origin", `allowed Origin for WS handshake (repeatable; e.g. "https://app.example.com" or "http://localhost:*")`, func(v string) error {
+		origins = append(origins, v)
+		return nil
+	})
 
 	if err := fs.Parse(args); err != nil {
 		fs.Usage()
@@ -52,6 +59,8 @@ func run(args []string) int {
 		KeyFile:       *key,
 		Insecure:      *insecure,
 		ICECandidates: *iceCandidates,
+		Password:      *password,
+		AllowedOrigins: origins,
 	}
 
 	// --insecure 必须在启动前打印显眼警告(CONTEXT.md --insecure mode)。
