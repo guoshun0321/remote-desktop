@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/guoshun0321/remote-desktop/host/signal"
 )
 
-// Server 是 Host 的 HTTPS server。本 slice(#2 骨架)只提供健康检查端点
-// 与(可选)冒烟页面;WebSocket 信令端点与 WebRTC 媒体端在后续 slice 加入。
+// Server 是 Host 的 HTTPS server。本 slice(#3)在 #2 的健康检查 / 冒烟页面
+// 基础上,挂载 WebSocket 信令端点 /ws(signal.Handler)。
 type Server struct {
-	cfg    Config
-	srv    *http.Server
-	logger *log.Logger
+	cfg     Config
+	srv     *http.Server
+	logger  *log.Logger
+	signal  *signal.Handler
 }
 
 // NewServer 构造一个 Host Server。Config 必须已通过 Validate。
 //
-// 路由(本 slice):
+// 路由:
 //
-//	GET /healthz   — 健康检查,返回 200 "ok"
-//	GET /          — 冒烟页面,让浏览器能确认 Host 已就绪
-//
-// 后续 slice 会在同一个 mux 上挂 /ws(信令端点,见 #3)。
+//	GET  /healthz — 健康检查,返回 200 "ok"
+//	GET  /        — 冒烟页面,让浏览器能确认 Host 已就绪
+//	WS   /ws      — 信令端点(#3):WebSocket 升级 + 单密码认证 +
+//	                SDP offer/answer + trickle ICE(answerer 角色)
 func NewServer(cfg Config, logger *log.Logger) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -30,6 +33,13 @@ func NewServer(cfg Config, logger *log.Logger) (*Server, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
+
+	signalHandler := signal.NewHandler(
+		cfg.Password,
+		cfg.EffectiveOrigins(),
+		signal.ICEConfig{Mode: cfg.ICECandidates},
+		logger,
+	)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +49,7 @@ func NewServer(cfg Config, logger *log.Logger) (*Server, error) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// 冒烟页面:让浏览器加载后能确认 Host 已就绪。
 		// 真实 Client SPA 与 Host 独立部署(CONTEXT.md TLS Topology),
-		// 本页面只是骨架 slice 的占位。
+		// 本页面只是占位。
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = fmt.Fprintln(w, `<!DOCTYPE html>
 <html lang="en">
@@ -50,13 +60,14 @@ func NewServer(cfg Config, logger *log.Logger) (*Server, error) {
 </body>
 </html>`)
 	})
+	mux.Handle("/ws", signalHandler)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
 		Handler: mux,
 	}
 
-	return &Server{cfg: cfg, srv: srv, logger: logger}, nil
+	return &Server{cfg: cfg, srv: srv, logger: logger, signal: signalHandler}, nil
 }
 
 // Start 启动 HTTPS server(或 --insecure 模式下的 HTTP server)。
